@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pay Log</title>
+  <meta name="theme-color" content="#0a0a0a" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon-192.png" />
+  <style>
+    :root { --bg:#0f1115; --card:#161a22; --fg:#eaeaea; --muted:#9aa1a9; --acc:#3b82f6; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+    header { padding:18px 16px; text-align:center; }
+    h1 { margin:0; font-size:22px; }
+    .wrap { max-width:860px; margin:0 auto; padding:16px; }
+    .card { background:var(--card); border-radius:12px; padding:14px; margin-bottom:14px; }
+    label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+    input, select { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #262b36; background:#0f1320; color:var(--fg); }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    button { padding:10px 14px; border:none; border-radius:8px; background:var(--acc); color:#fff; font-weight:600; cursor:pointer; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { text-align:left; padding:10px; border-bottom:1px solid #222634; font-size:14px; }
+    .muted { color:var(--muted); font-size:13px; }
+    .right { text-align:right; }
+    .toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .pill { background:#0f1320; border:1px solid #262b36; padding:6px 10px; border-radius:999px; color:var(--muted); font-size:12px; }
+    .install { display:none; }
+    footer { text-align:center; padding:14px; color:var(--muted); font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Pay Log</h1>
+    <div class="muted">Simple offline-first pay logging demo • PWA enabled</div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="row">
+        <div>
+          <label for="date">Date</label>
+          <input id="date" type="date" />
+        </div>
+        <div>
+          <label for="amount">Amount (£)</label>
+          <input id="amount" type="number" step="0.01" placeholder="0.00" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <div>
+          <label for="category">Category</label>
+          <select id="category">
+            <option value="Wage">Wage</option>
+            <option value="Tip">Tip</option>
+            <option value="Bonus">Bonus</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div>
+          <label for="notes">Notes</label>
+          <input id="notes" type="text" placeholder="Optional note" />
+        </div>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:10px;">
+        <button id="add">Add Entry</button>
+        <button id="export">Export CSV</button>
+        <button id="install" class="install">Install App</button>
+      </div>
+      <div class="muted" style="margin-top:8px;">Data is saved locally in your browser (IndexedDB). Works offline.</div>
+    </div>
+
+    <div class="card">
+      <div class="toolbar">
+        <span class="pill" id="countPill">0 entries</span>
+        <span class="pill">Total: £<span id="total">0.00</span></span>
+      </div>
+      <div style="overflow:auto; margin-top:10px;">
+        <table id="tbl">
+          <thead>
+            <tr>
+              <th>Date</th><th>Category</th><th>Notes</th><th class="right">Amount</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <footer>v1.0 • Cached for offline use</footer>
+
+  <script>
+  let deferredPrompt;
+  const installBtn = document.getElementById('install');
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    installBtn.style.display = 'inline-block';
+  });
+  installBtn?.addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    installBtn.style.display = 'none';
+  });
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js');
+    });
+  }
+
+  const dbName = 'paylog-db';
+  const storeName = 'entries';
+  let db;
+  const openDB = () => new Promise((resolve, reject) => {
+    const req = indexedDB.open(dbName, 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+
+  const addEntry = (entry) => new Promise(async (resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).add(entry);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+
+  const getAll = () => new Promise(async (resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const req = tx.objectStore(storeName).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+
+  const removeEntry = (id) => new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+
+  const formatGBP = (n) => (Number(n)||0).toFixed(2);
+  const tbody = document.querySelector('#tbl tbody');
+  const totalEl = document.getElementById('total');
+  const countPill = document.getElementById('countPill');
+
+  function render(rows) {
+    tbody.innerHTML = '';
+    let total = 0;
+    rows.forEach(row => {
+      total += Number(row.amount)||0;
+      const tr = document.createElement('tr');
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+      delBtn.onclick = async () => {
+        await removeEntry(row.id);
+        load();
+      };
+      tr.innerHTML = \`
+        <td>\${row.date || ''}</td>
+        <td>\${row.category || ''}</td>
+        <td>\${row.notes || ''}</td>
+        <td class="right">£\${formatGBP(row.amount)}</td>
+        <td></td>
+      \`;
+      tr.lastElementChild.appendChild(delBtn);
+      tbody.appendChild(tr);
+    });
+    totalEl.textContent = formatGBP(total);
+    countPill.textContent = \`\${rows.length} entries\`;
+  }
+
+  async function load() {
+    db = db || await openDB();
+    const rows = await getAll();
+    render(rows);
+  }
+
+  document.getElementById('add').addEventListener('click', async () => {
+    const date = document.getElementById('date').value;
+    const amount = document.getElementById('amount').value;
+    const category = document.getElementById('category').value;
+    const notes = document.getElementById('notes').value;
+    if (!amount) { alert('Please enter an amount'); return; }
+    await addEntry({ date, amount, category, notes });
+    document.getElementById('amount').value = '';
+    document.getElementById('notes').value = '';
+    load();
+  });
+
+  document.getElementById('export').addEventListener('click', async () => {
+    const rows = await getAll();
+    const header = ['Date','Category','Notes','Amount'];
+    const csv = [header.join(',')].concat(rows.map(r => [r.date, r.category, r.notes, r.amount].map(x => \`"\${(x||'').toString().replace(/"/g,'""')}"\`).join(','))).join('\\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'paylog.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  load();
+  </script>
+</body>
+</html>
